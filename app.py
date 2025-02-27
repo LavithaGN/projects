@@ -1,110 +1,133 @@
-from flask import Flask, render_template, Response, request, flash,redirect
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, login_user, UserMixin, logout_user
+from flask import Flask,render_template,request,redirect,session,url_for
+import os
 import pickle
 import numpy as np
 import pandas as pd
-
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.exc import IntegrityError
+import bcrypt
 
 app = Flask(__name__)
-
-model = pickle.load(open('brainstroke_model.pkl', 'rb'))
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydb.db'
-app.config['SECRET_KEY'] = 'thisissecret'
+port = int(os.getenv('PORT', 5000))
+app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///Model.db"
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.secret_key = '1A2bc4s'
 db = SQLAlchemy(app)
-login_manager = LoginManager()
-login_manager.init_app(app)
 
-class User(UserMixin, db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    fname = db.Column(db.String(80), nullable=False)
-    lname = db.Column(db.String(120), nullable=False)
-    password = db.Column(db.String(80), nullable=False)
-    def __repr__(self):
-        return '<User %r>' % self.username 
+hobbies = ['Academics','Arts','Sports']
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key = True)
+    username = db.Column(db.String(128),unique=True, nullable = False)
+    email = db.Column(db.String(128),unique=True, nullable = False)
+    password = db.Column(db.String(128), nullable = False)
     
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
+    def __repr__(self) -> str:
+        return  f'<User {self.username}>'
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'username': self.username,
+            'email': self.email
+        }
 
 with app.app_context():
     db.create_all()
-
-@app.route('/register', methods=['GET', 'POST'])   
-def register():
-    if request.method == 'POST':
-        email = request.form.get('email')
-        password = request.form.get('password')
-        username = request.form.get('uname')
-        fname = request.form.get('fname')
-        lname = request.form.get('lname')
-        user = User(email=email, password=password, username=username, fname=fname, lname=lname)
-        db.session.add(user)
-        db.session.commit()
-        flash('user has been registered successfully','success')
-        return redirect('/login')
-    return render_template('register.html')
-
-@app.route('/login', methods=['GET', 'POST'])
-def login1():
-    if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-        user = User.query.filter_by(username=username).first()
-        if user and password == user.password:
-            login_user(user)
-            return redirect('/stroke')
-        else:
-            flash('Invalid Credentials', 'warning')
-            return redirect('/login')
-    return render_template('login.html')
-
+    
 @app.route('/')
 def index():
-    return render_template("index.html")
+    return render_template('index.html')
 
-@app.route('/aboutus')
-def About():
-    return render_template("aboutus.html")
+@app.route('/model')
+def model():
+    return render_template("model.html")
 
-@app.route('/abstract')
-def abstract():
-    return render_template("abstract.html")
+@app.route('/about')
+def about():
+    return render_template("about.html")
 
-@app.route('/contactus')
-def contactus():
-    return render_template("contactus.html")
+@app.route('/result')
+def result():
+    return render_template("result_train.html")
 
-@app.route('/Model')
-def Model():
-    return render_template("Model.html")
-
-@app.route('/stroke')
-def Stroke():
-    return render_template('stroke.html')
-
-@app.route('/predict1')
-def Predict1():
-    return render_template('predict1.html')
-
-@app.route('/predict2')
-def Predict2():
-    return render_template('predict2.html')
-
-@app.route('/predict', methods = ['GET', 'POST'])
+@app.route('/logout')
+def logout():
+    session['logged'] = False
+    session.pop('userId',None)
+    return redirect('/')
+        
+@app.route('/predict',methods=['POST','GET'])
 def predict():
+    if request.method == "GET":
+        return render_template('predict.html')
+    
+        
+@app.route('/output',methods=['POST'])
+def output():    
+    model = pickle.load(open('./static/Models/kid_hobby.pkl', 'rb'))
+    images = ['academy.webp','art.jpg','science.jpg']
+
     int_features = [x for x in request.form.values()]
     final_features = [np.array(int_features)]
+
     prediction = model.predict(final_features)
-    output = prediction[0]
-    print (output)
-    if output == 0:
-        return render_template('Predict1.html', prediction_text= 'You  not suffering from Brain Stroke')
-    else:
-        return render_template('Predict2.html', prediction_text= 'Ouch! You are suffering from Brain Stroke')
+    output = prediction[0]  
+    
+    result = hobbies[output]
+    image_src = '../static/images/bg/' + images[output]
+    return render_template('output.html', output=result,image_src=image_src)
+
+@app.route('/register', methods=['POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form.get('name')
+        email = request.form.get('email')
+        newPass = request.form.get('newPass')
+        confPass = request.form.get('confPass')
+                
+        if not username or not confPass or not newPass or not email:
+            return render_template('login.html',error="Please enter all required fields")
+        
+        if newPass == confPass:
+            try:
+                salt = bcrypt.gensalt()
+                password_hash = bcrypt.hashpw(confPass.encode('utf-8'),salt)
+                new_user= User(username=username,email=email,password=password_hash)
+                db.session.add(new_user)
+                db.session.commit()
+                return redirect('/login')
+        
+            except IntegrityError:
+                return render_template('login.html',regError="username or email alredy exists")
+        else:
+            return render_template('login.html',regError="Passwords do not match")
+        
+@app.route('/login',methods=['POST','GET'])
+def login():
+    if request.method == 'GET':
+        return render_template('login.html')
+    elif request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        if not username or not password:
+            return render_template('login.html',loginError="Send all the required data")
+                
+        user = User.query.filter_by(username=username).first()
+        print(user)
+        if not user:
+            return render_template('login.html',loginError="No User Found")
+        
+        password_match = bcrypt.checkpw(password.encode('utf-8'),user.password)
+        if password_match:
+            session['logged'] = True
+            session['userId'] = user.id
+            print(user.id)
+            return redirect('/predict')
+        else:
+            return render_template('login.html',loginError="Password Incorrect")
 
 
 if __name__ == '__main__':
-    app.run(host="127.0.0.1", port=8081, debug=True)
+    app.run(debug=True,port=port)
